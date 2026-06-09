@@ -158,9 +158,6 @@ class OrcaRobot(Robot):
         if available_actuators > 0:
             self.data.ctrl[:available_actuators] = action_vector[:available_actuators]
             
-        # Ręczne nadpisanie ruchu na osi Y (indeks 18) na 20 centymetrów
-        self.data.ctrl[17] = 0.5
-            
         # Wykonanie kroku fizyki w MuJoCo
         mujoco.mj_step(self.model, self.data)
         
