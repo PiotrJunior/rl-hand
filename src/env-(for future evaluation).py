@@ -3,7 +3,7 @@ import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
 import torch
-from scene_builder import build_orca_scene 
+from src.scene import build_orca_scene 
 
 class OrcaHandEnv(gym.Env):
     """

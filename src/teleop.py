@@ -11,22 +11,13 @@ from lerobot.teleoperators import Teleoperator, TeleoperatorConfig
 @dataclasses.dataclass
 class KeyboardTeleoperatorConfig(TeleoperatorConfig):
     pass
-    # id: str = "keyboard_wasd"
-    # calibration_dir: Path | None = None
 
 
 class KeyboardTeleoperator(Teleoperator):
-    """
-    Teleoperator używający klawiatury do sterowania wektorem akcji robota.
-    Mapuje klawisze WASD i R/F na ostatnie 3 wymiary 20-elementowego wektora akcji.
-    """
     config_class = KeyboardTeleoperatorConfig
     name = "keyboard_teleop"
 
     def __init__(self, config: KeyboardTeleoperatorConfig):
-        # Inicjalizacja klasy bazowej (ustawi ID, katalogi kalibracji itp.)
-        # UWAGA: Jeśli w Twoim środowisku brakuje HF_LEROBOT_CALIBRATION, 
-        # możesz musieć podać własną ścieżkę do calibration_dir w konfiguracji.
         super().__init__(config)
         
         self._is_connected = False

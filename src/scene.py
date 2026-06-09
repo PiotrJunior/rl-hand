@@ -15,7 +15,7 @@ def build_orca_scene(show_viewer: bool = False):
     """
     try:
         gs.init(backend=gs.gpu)
-    except RuntimeError:
+    except gs.GenesisException:
         # Catch exception if the engine is accidentally re-initialized within the same process
         pass
         

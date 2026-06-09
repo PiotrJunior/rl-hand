@@ -88,8 +88,8 @@ def main():
                 # KROK E: Sprawdzenie warunku sukcesu
                 # Ponieważ porzuciliśmy Gymnasium, sami musimy stwierdzić, kiedy epizod się kończy.
                 # Wyciągamy na chwilę pozycje bezpośrednio z silnika na potrzeby tego skryptu:
-                sphere_pos = robot._get_to_numpy(robot.sphere.get_pos())
-                box_pos = robot._get_to_numpy(robot.box.get_pos())
+                sphere_pos = robot._get_to_numpy(robot.entities["sphere"].get_pos())
+                box_pos = robot._get_to_numpy(robot.entities["box"].get_pos())
                 distance = np.linalg.norm(sphere_pos - box_pos)
                 
                 if distance < 0.15:
