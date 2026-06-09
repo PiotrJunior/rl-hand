@@ -1,4 +1,5 @@
 import genesis as gs
+import torch
 gs.init(backend=gs.cpu)
 
 scene = gs.Scene(
@@ -26,6 +27,26 @@ scene.build()
 print("Liczba stopni swobody (DOFs):", orca.n_dofs)
 
 print("--- NAZWY DOF / STAWÓW ---")
+joint_names = [
+    "right_wrist",
+    "right_p-abd",
+    "right_p-mcp",
+    "right_p-pip",
+    "right_r-abd",
+    "right_r-mcp",
+    "right_r-pip",
+    "right_m-abd",
+    "right_m-mcp",
+    "right_m-pip",
+    "right_i-abd",
+    "right_i-mcp",
+    "right_i-pip",
+    "right_t-cmc",
+    "right_t-abd",
+    "right_t-mcp",
+    "right_t-pip",
+]
+
 for i, joint in enumerate(orca.joints):
     # Sprawdzamy czy dany staw ma stopnie swobody (nie jest zamrożony/stały)
     print(f"Staw {i}: {joint.name} | Typ: {joint.type}")
@@ -50,4 +71,8 @@ for i, joint in enumerate(orca.joints):
 # orca.set_dofs_position([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 
 for i in range(1000):
+    action = torch.zeros(orca.n_dofs)
+    action[0] = -1
+    action[1:3] = -1 
+    orca.control_dofs_position(action)
     scene.step()
