@@ -5,19 +5,18 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "genesis-world>=0.4.7",
-    "lerobot[hilserl]>=0.5.1",
     "mujoco>=3.8.1",
-    "opencv-python>=4.13.0.92",
     "torch",
     "torchvision",
+    "genesis-world>=0.4.7",
+    "lerobot>=0.5.1",
 ]
 
-[[tool.uv.index]]
-name = "pytorch-cpu"
-url = "https://download.pytorch.org/whl/cpu"
-explicit = true
-
-[tool.uv.sources]
-torch = [{ index = "pytorch-cpu" }]
-torchvision = [{ index = "pytorch-cpu" }]
+[tool.uv]
+exclude-dependencies = [
+    "opencv-python-headless",
+    "av",
+    "gymnasium",
+    "rerun-sdk",
+    "torchcodec",
+]

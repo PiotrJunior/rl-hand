@@ -1,12 +1,16 @@
 import dataclasses
+import cv2
 import numpy as np
 import torch
 import genesis as gs
+import logging
 
 from lerobot.robots import Robot, RobotConfig
 from lerobot.types import RobotAction, RobotObservation
 
 from scene import build_orca_scene    
+
+logging.getLogger("genesis").propagate = False
 
 @RobotConfig.register_subclass("genesis_orca")
 @dataclasses.dataclass
@@ -28,7 +32,7 @@ class GenesisOrcaRobot(Robot):
     def observation_features(self) -> dict:
         return {
             "agent_pos": (20,),          # Wektor 20-wymiarowy
-            "pixels/top": (480, 640, 3)  # Obraz w formacie HWC (Wysokość, Szerokość, Kanały)
+            "pixels/top": (480, 480, 3)  # Obraz w formacie HWC (Wysokość, Szerokość, Kanały)
         }
 
     @property
@@ -46,6 +50,8 @@ class GenesisOrcaRobot(Robot):
             return
 
         self.scene, self.entities = build_orca_scene(self.config.show_viewer)
+        self.initial_hand_pos = self.entities["hand"].get_pos()
+        self.initial_object_pos = self.entities["object"].get_pos()
         self._is_connected = True
         
         if calibrate:
@@ -63,8 +69,8 @@ class GenesisOrcaRobot(Robot):
         if not self._is_connected:
             raise RuntimeError("Cannot calibrate before connecting!")
             
-        self.entities["cube"].set_pos([0.0, 0.0, 0.1])
-        self.entities["sphere"].set_pos([0.0, 0.5, 0.1])
+        self.entities["hand"].set_pos(self.initial_hand_pos)
+        self.entities["object"].set_pos(self.initial_object_pos)
         self.scene.step()
         self._is_calibrated = True
 
@@ -84,19 +90,20 @@ class GenesisOrcaRobot(Robot):
         """
         if not self._is_connected:
             raise RuntimeError("Robot is not connected.")
+        
+        frame, _, _, _ = self.entities["camera"].render(rgb=True)
+        cv2.waitKey(20)
+        if isinstance(frame, torch.Tensor):
+            frame = frame.detach().cpu().numpy()
 
-        cube_pos = self._get_to_numpy(self.entities["cube"].get_pos())
+        hand_pos = self._get_to_numpy(self.entities["hand"].get_pos())
         
         agent_pos = np.zeros(20, dtype=np.float32)
-        agent_pos[17:20] = cube_pos 
-        
-        rgb, _, _, _ = self.entities["camera"].render(rgb=True)
-        if isinstance(rgb, torch.Tensor):
-            rgb = rgb.detach().cpu().numpy()
+        agent_pos[17:20] = hand_pos 
 
         return {
             "agent_pos": agent_pos,
-            "pixels/top": rgb.astype(np.uint8)
+            "pixels/top": frame.astype(np.uint8)
         }
 
     def send_action(self, action: RobotAction) -> RobotAction:
@@ -108,11 +115,11 @@ class GenesisOrcaRobot(Robot):
         hand_position_action = action_vector[17:20]
         
         # Obliczamy nową pozycję
-        current_cube_pos = self._get_to_numpy(self.entities["cube"].get_pos())
-        new_cube_pos = current_cube_pos + hand_position_action * 0.05
+        current_hand_pos = self._get_to_numpy(self.entities["hand"].get_pos())
+        new_hand_pos = current_hand_pos + hand_position_action * 0.05
         
         # Aplikujemy pozycję i wykonujemy krok fizyki
-        self.entities["cube"].set_pos(new_cube_pos)
+        # self.entities["hand"].set_pos(new_hand_pos)
         self.scene.step()
         
         # W prawdziwym robocie zwracamy tu faktycznie osiągniętą pozycję (po clampingu/limitach).
@@ -124,3 +131,4 @@ class GenesisOrcaRobot(Robot):
         self._is_calibrated = False
         # Genesis nie posiada agresywnej metody niszczenia instancji w locie,
         self.scene.viewer.stop()
+        cv2.destroyAllWindows()

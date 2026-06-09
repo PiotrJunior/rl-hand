@@ -1,7 +1,7 @@
 import time
 import numpy as np
 from pathlib import Path
-from lerobot.datasets.lerobot_dataset import LeRobotDataset
+# from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
 # Importujemy nasze stworzone wcześniej klasy
 # (Załóżmy, że zapisałeś je w plikach robot.py i teleop.py)
@@ -17,7 +17,7 @@ def main():
     print("Initializing components...")
     
     # 2. Inicjalizacja instancji sprzętowych
-    robot_config = GenesisOrcaRobotConfig(show_viewer=True)
+    robot_config = GenesisOrcaRobotConfig(show_viewer=False)
     robot = GenesisOrcaRobot(robot_config)
     teleop_config = KeyboardTeleoperatorConfig(id="keyboard")
     teleop = KeyboardTeleoperator(teleop_config)
@@ -88,9 +88,9 @@ def main():
                 # KROK E: Sprawdzenie warunku sukcesu
                 # Ponieważ porzuciliśmy Gymnasium, sami musimy stwierdzić, kiedy epizod się kończy.
                 # Wyciągamy na chwilę pozycje bezpośrednio z silnika na potrzeby tego skryptu:
-                sphere_pos = robot._get_to_numpy(robot.entities["sphere"].get_pos())
+                object_pos = robot._get_to_numpy(robot.entities["object"].get_pos())
                 box_pos = robot._get_to_numpy(robot.entities["box"].get_pos())
-                distance = np.linalg.norm(sphere_pos - box_pos)
+                distance = np.linalg.norm(object_pos - box_pos)
                 
                 if distance < 0.15:
                     print(f"Goal reached in {step} steps! Saving episode...")
@@ -111,7 +111,7 @@ def main():
     print("\nAll episodes recorded! Consolidating dataset...")
     # Ta funkcja łączy wszystkie klatki i wideo do zoptymalizowanych formatów hdf5 / mp4 / safetensors
     # dataset.consolidate()
-    print(f"Success! Dataset is ready at local path: {dataset.root}")
+    # print(f"Success! Dataset is ready at local path: {dataset.root}")
 
 if __name__ == "__main__":
     main()

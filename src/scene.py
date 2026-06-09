@@ -1,7 +1,7 @@
 # scene_builder.py
 import genesis as gs
 
-def build_orca_scene(show_viewer: bool = False):
+def build_orca_scene(show_viewer: bool):
     """
     Initializes the Genesis engine and constructs the physical world simulation.
     
@@ -34,38 +34,42 @@ def build_orca_scene(show_viewer: bool = False):
     plane = scene.add_entity(gs.morphs.Plane())
     
     # 2. Red Sphere (The target object that needs to be pushed/manipulated)
-    sphere = scene.add_entity(
-        morph=gs.morphs.Sphere(pos=(0.0, 0.5, 0.1), radius=0.08),
-        surface=gs.surfaces.Default(color=(1.0, 0.0, 0.0))
+    object = scene.add_entity(
+        morph=gs.morphs.Sphere(pos=(0.3, 0, 0.2), radius=0.08),
+        surface=gs.surfaces.Default(color=(0.5, 0.0, 0.0))
     )
     
     # 3. Green Box
     box = scene.add_entity(
-        morph=gs.morphs.Box(pos=(0.5, 0.5, 0.05), size=(0.3, 0.3, 0.1), fixed=True),
-        surface=gs.surfaces.Default(color=(0.0, 1.0, 0.0)),
+        morph=gs.morphs.Box(pos=(-.25, 0, 0.025), size=(0.3, 0.3, 0.05), fixed=True),
     )
     
-    # 4. Blue Cube
-    cube = scene.add_entity(
-        morph=gs.morphs.Box(pos=(0.0, 0.0, 0.1), size=(0.1, 0.1, 0.1)),
-        surface=gs.surfaces.Default(color=(0.0, 0.0, 1.0))
-    )
+    # Hand
+    hand = scene.add_entity(
+    gs.morphs.URDF(
+        file='orcahand_description/v2/models/urdf/orcahand_right.urdf',
+        pos=(0.3, -0.3, 0.5),
+        collision=True,
+        recompute_inertia=True
+    ),
+)
     
     # 5. Virtual Camera
     camera = scene.add_camera(
-        res=(640, 480),
-        pos=(1.5, 1.5, 1.2),
-        lookat=(0.3, 0.3, 0.1),
-        fov=45
+        res=(480, 480),
+        pos=(0, -1, 1),
+        lookat=(0, 0, 0.1),
+        fov=45,
+        GUI=True,
     )
-    
+
     scene.build()
     
     entities = {
         "plane": plane,
-        "sphere": sphere,
+        "object": object,
         "box": box,
-        "cube": cube,
+        "hand": hand,
         "camera": camera
     }
     
