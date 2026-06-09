@@ -14,23 +14,23 @@
     </body>
 
     <body name="hand_base_xyz" pos="0.15 0 0.25" gravcomp="1">
-      <joint name="slide_x" type="slide" axis="1 0 0" limited="true" range="-1 1" damping="2"/>
-      <joint name="slide_y" type="slide" axis="0 1 0" limited="true" range="-1 1" damping="2"/>
-      <joint name="slide_z" type="slide" axis="0 0 1" limited="true" range="-.5 1" damping="2"/>
+      <joint name="slide_x" type="slide" axis="1 0 0" limited="true" range="-1 1" damping="1"/>
+      <joint name="slide_y" type="slide" axis="0 1 0" limited="true" range="-1 1" damping="1"/>
+      <joint name="slide_z" type="slide" axis="0 0 1" limited="true" range="-.5 1" damping="1"/>
       
-      <geom type="sphere" size="0.05" rgba="1 0 0 1" condim="3" friction="1 0.005 0.0001"/>
+      <!-- <geom type="sphere" size="0.05" rgba="1 0 0 1" condim="3" friction="1 0.005 0.0001"/> -->
 
 
-      <body name="right_mount" pos="0 0 0" euler="-0.3 0 0" gravcomp="1">
+      <body name="right_mount" pos="0 0 0" euler="-0.3 0 0">
         <include file="models/mjcf/orcahand_right_body.xml"/>
       </body>
     </body>
   </worldbody>
 
   <actuator>
-    <position name="move_x" joint="slide_x" kp="1000000000" kv="1000" ctrlrange="-1 1"/>
-    <position name="move_y" joint="slide_y" kp="1000000000" kv="1000" ctrlrange="-1 1"/>
-    <position name="move_z" joint="slide_z" kp="1000000000" kv="1000" ctrlrange="-0.5 1"/>
+    <position name="move_x" joint="slide_x" kp="100" kv="10" ctrlrange="-1 1" forcelimited="false"/>
+    <position name="move_y" joint="slide_y" kp="100" kv="10" ctrlrange="-1 1" forcelimited="false"/>
+    <position name="move_z" joint="slide_z" kp="100" kv="10" ctrlrange="-0.5 1" forcelimited="false"/>
   </actuator>
 
 </mujoco>
