@@ -1,38 +1,46 @@
 import dataclasses
+import os
 import cv2
 import numpy as np
-import torch
-import genesis as gs
+import mujoco
+import mujoco.viewer
 import logging
 
 from lerobot.robots import Robot, RobotConfig
-from lerobot.types import RobotAction, RobotObservation
 
-from scene import build_orca_scene    
+# Wyłączenie powielania logów przez MuJoCo
+logging.getLogger("mujoco").propagate = False
 
-logging.getLogger("genesis").propagate = False
-
-@RobotConfig.register_subclass("genesis_orca")
+@RobotConfig.register_subclass("mujoco_orca")
 @dataclasses.dataclass
-class GenesisOrcaRobotConfig(RobotConfig):
+class OrcaRobotConfig(RobotConfig):
     show_viewer: bool = True
+    xml_path: str = "scene/scene.xml"  # Zmień na właściwą ścieżkę do Twojego głównego pliku MJCF
 
-class GenesisOrcaRobot(Robot):
-    name = "genesis_orca_robot"
-    config_class = GenesisOrcaRobotConfig
+class OrcaRobot(Robot):
+    name = "mujoco_orca_robot"
+    config_class = OrcaRobotConfig
+    hand_dof_count = 17
 
-    def __init__(self, config: GenesisOrcaRobotConfig):
+    def __init__(self, config: OrcaRobotConfig):
         super().__init__(config)
 
         self.config = config
         self._is_connected = False
         self._is_calibrated = False
+        
+        # Zmienne dla silnika MuJoCo
+        self.model = None
+        self.data = None
+        self.renderer = None
+        self.viewer = None
+        self.camera_id = 0
 
     @property
     def observation_features(self) -> dict:
         return {
-            "agent_pos": (20,),          # Wektor 20-wymiarowy
-            "pixels/top": (480, 480, 3)  # Obraz w formacie HWC (Wysokość, Szerokość, Kanały)
+            "agent_pos": (20,),          
+            "pixels/top": (3, 480, 480)  
         }
 
     @property
@@ -49,9 +57,29 @@ class GenesisOrcaRobot(Robot):
         if self._is_connected:
             return
 
-        self.scene, self.entities = build_orca_scene(self.config.show_viewer)
-        self.initial_hand_pos = self.entities["hand"].get_pos()
-        self.initial_object_pos = self.entities["object"].get_pos()
+        if not os.path.exists(self.config.xml_path):
+            raise FileNotFoundError(f"Nie znaleziono pliku sceny MuJoCo: {self.config.xml_path}")
+
+        # 1. Inicjalizacja modelu i danych MuJoCo
+        self.model = mujoco.MjModel.from_xml_path(self.config.xml_path)
+        self.data = mujoco.MjData(self.model)
+        
+        # 2. Inicjalizacja renderera off-screen dla zbierania danych (LeRobot)
+        self.renderer = mujoco.Renderer(self.model, height=480, width=480)
+        
+        # 3. Wyszukiwanie odpowiedniej kamery
+        self.camera_id = 0
+
+        # 4. Uruchomienie okna podglądu (Passive Viewer)
+        if self.config.show_viewer:
+            self.viewer = mujoco.viewer.launch_passive(self.model, self.data)
+            self.viewer.cam.type = mujoco.mjtCamera.mjCAMERA_FIXED
+            self.viewer.cam.fixedcamid = self.camera_id
+
+        # 5. Zapisanie stanu początkowego na potrzeby kalibracji (resetu)
+        self.initial_qpos = self.data.qpos.copy()
+        self.initial_qvel = self.data.qvel.copy()
+        
         self._is_connected = True
         
         if calibrate:
@@ -63,72 +91,98 @@ class GenesisOrcaRobot(Robot):
 
     def calibrate(self) -> None:
         """
-        W symulacji kalibracja sprowadza się do upewnienia się, 
-        że obiekty są na swoich pozycjach startowych.
+        Resetuje środowisko fizyczne do stanu początkowego.
         """
         if not self._is_connected:
-            raise RuntimeError("Cannot calibrate before connecting!")
+            raise RuntimeError("Nie można kalibrować przed nawiązaniem połączenia!")
             
-        self.entities["hand"].set_pos(self.initial_hand_pos)
-        self.entities["object"].set_pos(self.initial_object_pos)
-        self.scene.step()
+        # Przywrócenie zapisanych pozycji i prędkości
+        self.data.qpos[:] = self.initial_qpos
+        self.data.qvel[:] = self.initial_qvel
+        
+        # Przeliczenie kinematyki prostej, aby MuJoCo zaktualizowało fizykę
+        mujoco.mj_forward(self.model, self.data)
+        
+        # Odświeżenie okna
+        if self.config.show_viewer and self.viewer is not None:
+            self.viewer.sync()
+            
         self._is_calibrated = True
 
     def configure(self) -> None:
-        """Konfiguracja parametrów runtime (w naszym przypadku opcjonalna)"""
+        """Puste, niewymagane w prostej symulacji."""
         pass
 
-    def _get_to_numpy(self, tensor_or_array) -> np.ndarray:
-        if isinstance(tensor_or_array, torch.Tensor):
-            return tensor_or_array.detach().cpu().numpy().flatten()[:3]
-        return np.array(tensor_or_array).flatten()[:3]
-
-    def get_observation(self) -> RobotObservation:
+    def get_observation(self) -> dict[str, np.ndarray]:
         """
-        Pobiera klatkę z kamery i pozycję, a następnie mapuje je ściśle 
-        do kluczy zadeklarowanych w `observation_features`.
+        Renderuje klatkę z kamery, wyświetla ją w OpenCV i wyciąga pozycje stawów z MuJoCo.
         """
         if not self._is_connected:
-            raise RuntimeError("Robot is not connected.")
+            raise RuntimeError("Robot nie jest połączony.")
         
-        frame, _, _, _ = self.entities["camera"].render(rgb=True)
-        cv2.waitKey(20)
-        if isinstance(frame, torch.Tensor):
-            frame = frame.detach().cpu().numpy()
-
-        hand_pos = self._get_to_numpy(self.entities["hand"].get_pos())
-        
+        # Pobranie do 20 pozycji stawów (qpos)
         agent_pos = np.zeros(20, dtype=np.float32)
-        agent_pos[17:20] = hand_pos 
+        available_qpos = len(self.data.qpos)
+        # print(f"Available qpos: {available_qpos}")
+        # agent_pos[:available_qpos] = self.data.qpos[:available_qpos]
+        
+        # Renderowanie obrazu z MuJoCo (w formacie RGB)
+        self.renderer.update_scene(self.data, camera=self.camera_id)
+        raw_image = self.renderer.render()
+        
+        # --- RYSOWANIE I WYŚWIETLANIE OPENCV ---
+        # Wyświetlenie okna podglądu kamery LeRobot
+        opencv_image = cv2.cvtColor(raw_image, cv2.COLOR_RGB2BGR)
+        cv2.imshow("LeRobot Camera - pixels/top", opencv_image)
+        cv2.waitKey(1)
 
+        # Transpozycja z HWC do CHW dla kompatybilności z LeRobot
+        lerobot_pixels = np.transpose(raw_image, (2, 0, 1)).astype(np.uint8)
+        
         return {
             "agent_pos": agent_pos,
-            "pixels/top": frame.astype(np.uint8)
+            "pixels/top": lerobot_pixels
         }
 
-    def send_action(self, action: RobotAction) -> RobotAction:
+    def send_action(self, action: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+        """
+        Aplikuje wektor akcji do silników MuJoCo i wykonuje krok symulacji.
+        """
         if not self._is_connected:
-            raise RuntimeError("Robot is not connected.")
+            raise RuntimeError("Robot nie jest połączony.")
 
-        # Wyciągamy z wektora ostatnie 3 elementy dla pozycji X, Y, Z
         action_vector = action["action"]
-        hand_position_action = action_vector[17:20]
         
-        # Obliczamy nową pozycję
-        current_hand_pos = self._get_to_numpy(self.entities["hand"].get_pos())
-        new_hand_pos = current_hand_pos + hand_position_action * 0.05
+        # Aplikacja sygnału kontrolnego (do 20 silników w data.ctrl)
+        available_actuators = min(20, self.model.nu)
+        if available_actuators > 0:
+            self.data.ctrl[:available_actuators] = action_vector[:available_actuators]
+            
+        # Ręczne nadpisanie ruchu na osi Y (indeks 18) na 20 centymetrów
+        self.data.ctrl[17] = 0.5
+            
+        # Wykonanie kroku fizyki w MuJoCo
+        mujoco.mj_step(self.model, self.data)
         
-        # Aplikujemy pozycję i wykonujemy krok fizyki
-        # self.entities["hand"].set_pos(new_hand_pos)
-        self.scene.step()
-        
-        # W prawdziwym robocie zwracamy tu faktycznie osiągniętą pozycję (po clampingu/limitach).
-        # W symulacji możemy po prostu zwrócić wejściową akcję.
+        # Synchronizacja okna wizualnego z nowym stanem fizycznym
+        if self.config.show_viewer and self.viewer is not None and self.viewer.is_running():
+            self.viewer.sync()
+            
         return action
 
     def disconnect(self) -> None:
+        """
+        Bezpieczne zamknięcie renderera i okna symulacji.
+        """
         self._is_connected = False
         self._is_calibrated = False
-        # Genesis nie posiada agresywnej metody niszczenia instancji w locie,
-        self.scene.viewer.stop()
+        
+        if self.viewer is not None:
+            self.viewer.close()
+            self.viewer = None
+            
+        if self.renderer is not None:
+            self.renderer.close()
+            self.renderer = None
+            
         cv2.destroyAllWindows()

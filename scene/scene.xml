@@ -1,0 +1,33 @@
+<?xml version="1.0" ?>
+<mujoco model="ORCA hand right scene">
+
+  <include file="models/assets/scene.xml"/>
+  <include file="models/assets/options.xml"/>
+  <include file="models/mjcf/orcahand_right.mjcf"/>
+
+  <worldbody>
+    <camera name="pixels/top" pos="0 -0.5 0.5" xyaxes="1 0 0 0 1 1" fovy="60"/>
+
+    <body name="ball" pos="-0.15 0.0 0.1">
+      <freejoint name="ball_joint"/>
+      <geom type="sphere" size="0.05" rgba="1 0 0 1" condim="3" friction="1 0.005 0.0001"/>
+    </body>
+
+    <body name="hand_base_xyz" pos="0.15 0 0">
+      <joint name="slide_x" type="slide" axis="1 0 0" limited="true" range="-0.5 0.5" damping="20"/>
+      <joint name="slide_y" type="slide" axis="0 1 0" limited="true" range="-0.5 0.5" damping="20"/>
+      <joint name="slide_z" type="slide" axis="0 0 1" limited="true" range="-0.05 0.5" damping="20"/>
+
+      <body name="right_mount" pos="0 0 0" euler="-0.3 0 0">
+        <include file="models/mjcf/orcahand_right_body.xml"/>
+      </body>
+    </body>
+  </worldbody>
+
+  <actuator>
+    <position name="move_x" joint="slide_x" kp="2000" kv="100" ctrlrange="-0.5 0.5"/>
+    <position name="move_y" joint="slide_y" kp="2000" kv="100" ctrlrange="-0.5 0.5"/>
+    <position name="move_z" joint="slide_z" kp="2000" kv="100" ctrlrange="-0.05 0.5"/>
+  </actuator>
+
+</mujoco>
