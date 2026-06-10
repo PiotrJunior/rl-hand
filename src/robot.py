@@ -154,7 +154,7 @@ class OrcaRobot(Robot):
         action_vector = action["action"]
         
         # Aplikacja sygnału kontrolnego (do 20 silników w data.ctrl)
-        available_actuators = min(20, self.model.nu)
+        available_actuators = self.model.nu
         if available_actuators > 0:
             self.data.ctrl[:available_actuators] = action_vector[:available_actuators]
             
