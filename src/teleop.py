@@ -2,7 +2,6 @@ import abc
 import dataclasses
 import numpy as np
 from typing import Any
-from pathlib import Path
 from pynput import keyboard
 
 from lerobot.teleoperators import Teleoperator, TeleoperatorConfig
@@ -23,18 +22,26 @@ class KeyboardTeleoperator(Teleoperator):
         self._is_connected = False
         self.listener = None
         
-        # Inicjalizujemy pusty, 20-wymiarowy wektor akcji 
-        # (indeksy 17, 18, 19 będą modyfikowane przez klawiaturę)
-        self.current_action = np.zeros(20, dtype=np.float32)
+        # Inicjalizujemy pusty słownik, który idealnie pokrywa się z wybranymi kluczami akcji w Robot
+        self.current_action = {
+            "x.pos": 0.0,
+            "y.pos": 0.0,
+            "z.pos": 0.0
+        }
 
     @property
-    def action_features(self) -> dict:
-        """Kształt akcji generowanych przez ten teleoperator (musi pasować do robota)."""
-        return {"action": (20,)}
+    def action_features(self) -> dict[str, type]:
+        """Kształt akcji deklarowany przez teleoperator."""
+        # Ponieważ wysyłamy pojedyncze zmienne osiowe, definiujemy je jako typ float.
+        return {
+            "x.pos": float,
+            "y.pos": float,
+            "z.pos": float
+        }
 
     @property
     def feedback_features(self) -> dict:
-        """Klawiatura nie posiada sprzężenia zwrotnego (Force Feedback), więc zwracamy pusty słownik."""
+        """Klawiatura nie posiada Force Feedback, więc nic nie przyjmuje."""
         return {}
 
     @property
@@ -55,57 +62,52 @@ class KeyboardTeleoperator(Teleoperator):
 
     @property
     def is_calibrated(self) -> bool:
-        """Klawiatura nie wymaga kalibracji, zawsze zwracamy True."""
         return True
 
     def calibrate(self) -> None:
-        """Brak akcji dla klawiatury."""
         pass
 
     def configure(self) -> None:
-        """Brak specjalnej konfiguracji sprzętowej dla klawiatury."""
         pass
 
     def _on_press(self, key):
-        """Callback modyfikujący wektor akcji w momencie wciśnięcia klawisza."""
+        """Mapuje wciśnięcia klawiszy bezpośrednio na konkretne nazwane akcje."""
         try:
-            # Oś X (Przód/Tył) -> indeks 17
-            if key.char == 'w': self.current_action[17] = 1.0
-            elif key.char == 's': self.current_action[17] = -1.0
-            # Oś Y (Lewo/Prawo) -> indeks 18
-            elif key.char == 'a': self.current_action[18] = -1.0
-            elif key.char == 'd': self.current_action[18] = 1.0
-            # Oś Z (Góra/Dół) -> indeks 19
-            elif key.char == 'r': self.current_action[19] = 1.0
-            elif key.char == 'f': self.current_action[19] = -1.0
+            # Oś X (Przód/Tył)
+            if key.char == 'w': self.current_action["y.pos"] = 1.0
+            elif key.char == 's': self.current_action["y.pos"] = -1.0
+            # Oś Y (Lewo/Prawo)
+            elif key.char == 'a': self.current_action["x.pos"] = -1.0
+            elif key.char == 'd': self.current_action["x.pos"] = 1.0
+            # Oś Z (Góra/Dół)
+            elif key.char == 'r': self.current_action["z.pos"] = 1.0
+            elif key.char == 'f': self.current_action["z.pos"] = -1.0
         except AttributeError:
-            pass # Ignorujemy klawisze specjalne (Shift, Ctrl itp.)
+            pass # Ignorowanie klawiszy specjalnych np. Shift, Cmd
 
     def _on_release(self, key):
-        """Callback zerujący daną oś po puszczeniu klawisza."""
+        """Zeruje konkretną nazwę osi po puszczeniu klawisza."""
         try:
-            if key.char in ['w', 's']: self.current_action[17] = 0.0
-            if key.char in ['a', 'd']: self.current_action[18] = 0.0
-            if key.char in ['r', 'f']: self.current_action[19] = 0.0
+            if key.char in ['w', 's']: self.current_action["x.pos"] = 0.0
+            if key.char in ['a', 'd']: self.current_action["y.pos"] = 0.0
+            if key.char in ['r', 'f']: self.current_action["z.pos"] = 0.0
         except AttributeError:
             pass
 
-    def get_action(self) -> dict[str, np.ndarray]:
+    def get_action(self) -> dict[str, float]:
         """
-        Zwraca aktualny stan wygenerowany przez teleoperator.
-        Zwracamy kopię wektora, aby zapobiec mutacjom przez referencję w dalszym potoku LeRobot.
+        Zwraca kopię słownika z gotowymi, nazwanymi komendami akcji.
+        Zwracamy kopię, by pętla zewnętrzna nie nadpisała referencji w pamięci.
         """
         if not self._is_connected:
             raise RuntimeError("Teleoperator is not connected.")
             
-        return {"action": self.current_action.copy()}
+        return self.current_action.copy()
 
     def send_feedback(self, feedback: dict[str, Any]) -> None:
-        """Puste wywołanie - klawiatura nie wibruje i nie stawia oporu na podstawie akcji."""
         pass
 
     def disconnect(self) -> None:
-        """Zatrzymuje nasłuchiwanie klawiatury i sprząta zasoby."""
         if self.listener is not None:
             self.listener.stop()
             self.listener = None

@@ -1,21 +1,39 @@
-import dataclasses
+import sys
 import os
+import dataclasses
+import logging
+from functools import cached_property
 import cv2
 import numpy as np
 import mujoco
 import mujoco.viewer
-import logging
 
 from lerobot.robots import Robot, RobotConfig
+from lerobot.cameras.camera import CameraConfig
 
-# Wyłączenie powielania logów przez MuJoCo
+# Disable redundant MuJoCo logging duplicates
 logging.getLogger("mujoco").propagate = False
+
+# ==============================================================================
+# 1. ROBOT CONFIGURATION
+# ==============================================================================
 
 @RobotConfig.register_subclass("mujoco_orca")
 @dataclasses.dataclass
 class OrcaRobotConfig(RobotConfig):
     show_viewer: bool = True
-    xml_path: str = "scene/scene.xml"  # Zmień na właściwą ścieżkę do Twojego głównego pliku MJCF
+    render: bool = True  
+    xml_path: str = "scene/scene.xml"
+    
+    # 👇 Update this to use explicit CameraConfig instances
+    cameras: dict[str, CameraConfig] = dataclasses.field(default_factory=lambda: {
+        "base": CameraConfig(height=480, width=640, fps=30),
+        "wrist": CameraConfig(height=480, width=640, fps=30)
+    })
+
+# ==============================================================================
+# 2. CORE ROBOT CLASS (Multi-Camera Compliant)
+# ==============================================================================
 
 class OrcaRobot(Robot):
     name = "mujoco_orca_robot"
@@ -24,59 +42,93 @@ class OrcaRobot(Robot):
 
     def __init__(self, config: OrcaRobotConfig):
         super().__init__(config)
-
         self.config = config
         self._is_connected = False
         self._is_calibrated = False
         
-        # Zmienne dla silnika MuJoCo
+        # MuJoCo engine components
         self.model = None
         self.data = None
-        self.renderer = None
         self.viewer = None
-        self.camera_id = 0
+        
+        # Multi-camera lookup containers
+        self.renderers = {}
+        self.camera_name_to_id = {}
+
+    # --------------------------------------------------------------------------
+    # MOTOR & CAMERA FEATURES SCHEMA
+    # --------------------------------------------------------------------------
 
     @property
-    def observation_features(self) -> dict:
-        return {
-            "agent_pos": (20,),          
-            "pixels/top": (3, 480, 480)  
-        }
+    def _motors_ft(self) -> dict[str, type]:
+        """Generates explicit named features for all 20 degrees of freedom."""
+        hand_names = [f"hand_joint_{i:02d}.pos" for i in range(1, 18)]
+        aux_names = ["x.pos", "y.pos", "z.pos"]
+        
+        all_joint_names = tuple(hand_names + aux_names)
+        return dict.fromkeys(all_joint_names, float)
 
     @property
-    def action_features(self) -> dict:
+    def _cameras_ft(self) -> dict[str, tuple]:
+        """Dynamically generates camera feature shapes in native HWC format."""
         return {
-            "action": (20,)
+            cam: (self.config.cameras[cam].height, self.config.cameras[cam].width, 3) 
+            for cam in self.config.cameras
         }
+
+    @cached_property
+    def observation_features(self) -> dict[str, type | tuple]:
+        """Combines named motor states and native HWC camera shapes."""
+        return {**self._motors_ft, **self._cameras_ft}
+
+    @cached_property
+    def action_features(self) -> dict[str, type]:
+        """Actions mirror the named motor joint states exactly."""
+        return self._motors_ft
+
+    # --------------------------------------------------------------------------
+    # HARDWARE LIFECYCLE MANAGEMENT
+    # --------------------------------------------------------------------------
 
     @property
     def is_connected(self) -> bool:
-        return self._is_connected
+        return self._is_connected and (len(self.renderers) > 0)
 
     def connect(self, calibrate: bool = True) -> None:
         if self._is_connected:
             return
 
         if not os.path.exists(self.config.xml_path):
-            raise FileNotFoundError(f"Nie znaleziono pliku sceny MuJoCo: {self.config.xml_path}")
+            raise FileNotFoundError(f"MuJoCo scene file not found at: {self.config.xml_path}")
 
-        # 1. Inicjalizacja modelu i danych MuJoCo
+        # 1. Initialize MuJoCo model and execution structures
         self.model = mujoco.MjModel.from_xml_path(self.config.xml_path)
         self.data = mujoco.MjData(self.model)
         
-        # 2. Inicjalizacja renderera off-screen dla zbierania danych (LeRobot)
-        self.renderer = mujoco.Renderer(self.model, height=480, width=480)
-        
-        # 3. Wyszukiwanie odpowiedniej kamery
-        self.camera_id = 0
+        # 2. Set up dedicated render contexts for each configured camera stream
+        for cam_name, cam_cfg in self.config.cameras.items():
+            # Resolve the string camera name from XML to its internal numerical ID
+            cam_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_CAMERA, cam_name)
+            if cam_id == -1:
+                raise ValueError(f"Camera identifier '{cam_name}' not found in MJCF scene layout xml.")
+            
+            self.camera_name_to_id[cam_name] = cam_id
+            
+            # Each renderer instance allocates separate resolution-optimized frame buffers
+            self.renderers[cam_name] = mujoco.Renderer(
+                self.model, 
+                height=cam_cfg.height, 
+                width=cam_cfg.width
+            )
 
-        # 4. Uruchomienie okna podglądu (Passive Viewer)
+        # 3. Launch interactive visualization window using "base" view as default viewport
         if self.config.show_viewer:
             self.viewer = mujoco.viewer.launch_passive(self.model, self.data)
             self.viewer.cam.type = mujoco.mjtCamera.mjCAMERA_FIXED
-            self.viewer.cam.fixedcamid = self.camera_id
+            if "base" in self.camera_name_to_id:
+                self.viewer.cam.fixedcamid = self.camera_name_to_id["base"]
 
-        # 5. Zapisanie stanu początkowego na potrzeby kalibracji (resetu)
+        # 4. Cache initial structural positions for physics calibration resets
         self.initial_qpos = self.data.qpos.copy()
         self.initial_qvel = self.data.qvel.copy()
         
@@ -90,87 +142,80 @@ class OrcaRobot(Robot):
         return self._is_calibrated
 
     def calibrate(self) -> None:
-        """
-        Resetuje środowisko fizyczne do stanu początkowego.
-        """
         if not self._is_connected:
-            raise RuntimeError("Nie można kalibrować przed nawiązaniem połączenia!")
+            raise RuntimeError("Cannot calibrate environment before connecting to simulation context.")
             
-        # Przywrócenie zapisanych pozycji i prędkości
         self.data.qpos[:] = self.initial_qpos
         self.data.qvel[:] = self.initial_qvel
-        
-        # Przeliczenie kinematyki prostej, aby MuJoCo zaktualizowało fizykę
         mujoco.mj_forward(self.model, self.data)
         
-        # Odświeżenie okna
         if self.config.show_viewer and self.viewer is not None:
             self.viewer.sync()
             
         self._is_calibrated = True
 
     def configure(self) -> None:
-        """Puste, niewymagane w prostej symulacji."""
         pass
 
-    def get_observation(self) -> dict[str, np.ndarray]:
-        """
-        Renderuje klatkę z kamery, wyświetla ją w OpenCV i wyciąga pozycje stawów z MuJoCo.
-        """
+    # --------------------------------------------------------------------------
+    # DATA STEERING (Input / Output Pipelines)
+    # --------------------------------------------------------------------------
+
+    def get_observation(self) -> dict[str, float | np.ndarray]:
+        """Polls current joint telemetry and returns native HWC camera images."""
         if not self._is_connected:
-            raise RuntimeError("Robot nie jest połączony.")
+            raise RuntimeError("Robot instance must be connected to poll system telemetry.")
         
-        # Pobranie do 20 pozycji stawów (qpos)
-        agent_pos = np.zeros(20, dtype=np.float32)
+        obs_dict = {}
         available_qpos = len(self.data.qpos)
-        # print(f"Available qpos: {available_qpos}")
-        # agent_pos[:available_qpos] = self.data.qpos[:available_qpos]
         
-        # Renderowanie obrazu z MuJoCo (w formacie RGB)
-        self.renderer.update_scene(self.data, camera=self.camera_id)
-        raw_image = self.renderer.render()
+        # 1. Map flat MuJoCo joint arrays to explicit named float keys
+        for i, joint_name in enumerate(self._motors_ft.keys()):
+            obs_dict[joint_name] = float(self.data.qpos[i]) if i < available_qpos else 0.0
         
-        # --- RYSOWANIE I WYŚWIETLANIE OPENCV ---
-        # Wyświetlenie okna podglądu kamery LeRobot
-        opencv_image = cv2.cvtColor(raw_image, cv2.COLOR_RGB2BGR)
-        cv2.imshow("LeRobot Camera - pixels/top", opencv_image)
-        cv2.waitKey(1)
+        # 2. Sequentially update and extract matrices from all active renderer instances
+        for cam_key, cam_id in self.camera_name_to_id.items():
+            renderer = self.renderers[cam_key]
+            renderer.update_scene(self.data, camera=cam_id)
+            raw_image = renderer.render()  # Returns native HWC (H, W, 3) matrix
+            
+            # Populate the observation dictionary directly with raw data
+            obs_dict[cam_key] = raw_image
+            
+            # 3. Handle live rendering preview window via OpenCV conditional flag
+            if self.config.render:
+                opencv_image = cv2.cvtColor(raw_image, cv2.COLOR_RGB2BGR)
+                cv2.imshow(f"LeRobot Viewport - {cam_key}", opencv_image)
+        
+        if self.config.render:
+            cv2.waitKey(1)
+        
+        return obs_dict
 
-        # Transpozycja z HWC do CHW dla kompatybilności z LeRobot
-        lerobot_pixels = np.transpose(raw_image, (2, 0, 1)).astype(np.uint8)
-        
-        return {
-            "agent_pos": agent_pos,
-            "pixels/top": lerobot_pixels
-        }
-
-    def send_action(self, action: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
-        """
-        Aplikuje wektor akcji do silników MuJoCo i wykonuje krok symulacji.
-        """
+    def send_action(self, action: dict[str, float]) -> dict[str, float]:
+        """Reassembles flat motor array from named dictionary updates and ticks physics."""
         if not self._is_connected:
-            raise RuntimeError("Robot nie jest połączony.")
+            raise RuntimeError("Robot instance must be connected to dispatch control targets.")
 
-        action_vector = action["action"]
-        
-        # Aplikacja sygnału kontrolnego (do 20 silników w data.ctrl)
+        # 1. Rebuild flat control topology array from active feature dictionaries
+        action_vector = np.zeros(20, dtype=np.float32)
+        for i, joint_name in enumerate(self._motors_ft.keys()):
+            action_vector[i] = action.get(joint_name, 0.0)
+
+        # 2. Assign control outputs directly into MuJoCo actuator cells
         available_actuators = min(20, self.model.nu)
         if available_actuators > 0:
             self.data.ctrl[:available_actuators] = action_vector[:available_actuators]
             
-        # Wykonanie kroku fizyki w MuJoCo
+        # 3. Advance physics world metrics by one simulation step unit
         mujoco.mj_step(self.model, self.data)
         
-        # Synchronizacja okna wizualnego z nowym stanem fizycznym
         if self.config.show_viewer and self.viewer is not None and self.viewer.is_running():
             self.viewer.sync()
             
-        return action
+        return {joint_name: action.get(joint_name, 0.0) for joint_name in self._motors_ft.keys()}
 
     def disconnect(self) -> None:
-        """
-        Bezpieczne zamknięcie renderera i okna symulacji.
-        """
         self._is_connected = False
         self._is_calibrated = False
         
@@ -178,8 +223,10 @@ class OrcaRobot(Robot):
             self.viewer.close()
             self.viewer = None
             
-        if self.renderer is not None:
-            self.renderer.close()
-            self.renderer = None
+        # Clean up all allocated renderer memory instances safely
+        for renderer in self.renderers.values():
+            renderer.close()
+        self.renderers.clear()
+        self.camera_name_to_id.clear()
             
         cv2.destroyAllWindows()

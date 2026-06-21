@@ -5,7 +5,6 @@ from pathlib import Path
 import questionary
 import shutil
 
-# LeRobot imports
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
 # Hardware class imports
@@ -14,7 +13,7 @@ from teleop import KeyboardTeleoperator, KeyboardTeleoperatorConfig
 
 
 # ==============================================================================
-# 1. HARDWARE REGISTRIES WITH DATASET STRUCTURE DEFINITIONS (FEATURES)
+# 1. HARDWARE REGISTRIES
 # ==============================================================================
 
 ROBOT_REGISTRY = {
@@ -23,16 +22,6 @@ ROBOT_REGISTRY = {
         "class": OrcaRobot,
         "config_class": OrcaRobotConfig,
         "default_args": {"show_viewer": False},
-        # Define observation features for this specific robot
-        "features": {
-            "observation.state": {"dtype": "float32", "shape": (20,), "names": None},
-            "observation.images.top": {"dtype": "video", "shape": (3, 480, 480), "names": ["c", "h", "w"]},
-        },
-        # Mapping: key from robot obs_dict -> target key in LeRobot dataset
-        "image_mapping": {
-            "obs_key": "pixels/top",
-            "dataset_key": "observation.images.top"
-        }
     },
 }
 
@@ -42,26 +31,17 @@ TELEOP_REGISTRY = {
         "class": KeyboardTeleoperator,
         "config_class": KeyboardTeleoperatorConfig,
         "default_args": {"id": "keyboard"},
-        # Keyboard generates a full 20 DoF action vector
-        "features": {
-            "action": {"dtype": "float32", "shape": (20,), "names": None}
-        }
     },
 }
 
 
 # ==============================================================================
-# 2. CORE RECORDING PIPELINE (Main Loop)
+# 2. CORE RECORDING PIPELINE
 # ==============================================================================
 
 def main(config: dict):
-    """
-    Execution function. Accepts configuration and dynamically builds 
-    the dataset structure based on selected components.
-    """
     print("\nInitializing components...")
     
-    # 1. Dynamically instantiate the robot and teleoperation interface
     selected_robot = ROBOT_REGISTRY[config["robot_type"]]
     robot_cfg = selected_robot["config_class"](**selected_robot["default_args"])
     robot = selected_robot["class"](robot_cfg)
@@ -70,17 +50,39 @@ def main(config: dict):
     teleop_cfg = selected_teleop["config_class"](**selected_teleop["default_args"])
     teleop = selected_teleop["class"](teleop_cfg)
 
-    # 2. DYNAMICALLY COMPOSE FEATURES STRUCTURE
+    # --------------------------------------------------------------------------
+    # BUDOWANIE SCHEMATU ZGODNEGO ZE STANDARDEM LEROBOT V3
+    # --------------------------------------------------------------------------
     dynamic_features = {}
-    dynamic_features.update(selected_robot["features"])
-    dynamic_features.update(selected_teleop["features"])
+    
+    # 1. Grupujemy wszystkie silniki w jeden wektor i pobieramy ich nazwy
+    motor_keys = list(robot.action_features.keys())
+    num_motors = len(motor_keys)
+    
+    dynamic_features["action"] = {
+        "dtype": "float32",
+        "shape": (num_motors,),
+        "names": motor_keys  # Tutaj LeRobot zapamięta nazwy przegubów!
+    }
+    dynamic_features["observation.state"] = {
+        "dtype": "float32",
+        "shape": (num_motors,),
+        "names": motor_keys
+    }
+
+    # 2. Mapujemy kamery dodając prefix i używając natywnego formatu HWC
+    for key, ft_type in robot.observation_features.items():
+        if isinstance(ft_type, tuple) and len(ft_type) == 3:
+            h, w, c = ft_type
+            dynamic_features[f"observation.images.{key}"] = {
+                "dtype": "video",
+                "shape": (h, w, c), # Natywny format z OpenCV/MuJoCo
+                "names": ["height", "width", "channels"]
+            }
 
     dataset = None
     if config["save_trajectory"]:
         print(f"[INFO] Initializing LeRobot dataset for: {config['repo_id']}")
-        print(f"[INFO] Detected dynamic features structure: {list(dynamic_features.keys())}")
-        
-        # Safe initialization (directory check already passed in prompt step)
         dataset = LeRobotDataset.create(
             repo_id=config["repo_id"],
             fps=config["fps"],
@@ -89,7 +91,9 @@ def main(config: dict):
 
     print("Setup complete. Starting recording loop...")
 
-    # 3. Recording loop inside context managers
+    # --------------------------------------------------------------------------
+    # PĘTLA NAGRYWANIA
+    # --------------------------------------------------------------------------
     with robot, teleop:
         for ep_idx in range(config["episodes_to_record"]):
             print(f"\n--- Starting Episode {ep_idx + 1}/{config['episodes_to_record']} ---")
@@ -101,26 +105,45 @@ def main(config: dict):
             while not done:
                 start_time = time.perf_counter()
                 
+                # 1. Pobranie komend z teleoperatora
                 action_dict = teleop.get_action()
-                robot.send_action(action_dict)
+                
+                # Jeśli klawiatura wysyła stary płaski wektor, rzutujemy go na nazwany słownik
+                if "action" in action_dict and isinstance(action_dict["action"], (np.ndarray, list)):
+                    flat_actions = action_dict["action"]
+                    action_to_send = {name: float(flat_actions[i]) if i < len(flat_actions) else 0.0 for i, name in enumerate(motor_keys)}
+                else:
+                    action_to_send = action_dict
+
+                # 2. Wysyłamy do robota i pobieramy zweryfikowane akcje oraz stan
+                applied_action = robot.send_action(action_to_send)
                 obs_dict = robot.get_observation()
                 
-                # Frame logging (if enabled)
+                # 3. Zapisujemy ramkę
                 if config["save_trajectory"] and dataset is not None:
-                    img_obs_key = selected_robot["image_mapping"]["obs_key"]
-                    img_dataset_key = selected_robot["image_mapping"]["dataset_key"]
+                    frame_payload = {}
                     
-                    img_chw = obs_dict[img_obs_key]
+                    # a) Pakowanie pozycji i akcji w czyste wektory numpy
+                    obs_state_array = np.zeros(num_motors, dtype=np.float32)
+                    action_array = np.zeros(num_motors, dtype=np.float32)
                     
-                    # Add the frame to the dataset using dynamic keys
-                    dataset.add_frame({
-                        "observation.state": obs_dict["agent_pos"],
-                        img_dataset_key: img_chw,
-                        "action": action_dict["action"],
-                        "task": "Get the red sphere into the green box!"
-                    })
+                    for i, motor_name in enumerate(motor_keys):
+                        obs_state_array[i] = obs_dict.get(motor_name, 0.0)
+                        action_array[i] = applied_action.get(motor_name, 0.0)
+                        
+                    frame_payload["observation.state"] = obs_state_array
+                    frame_payload["action"] = action_array
+                    frame_payload["task"] = "Get the red sphere into the green box!"
+                    
+                    # b) Pakowanie obrazów HWC (Bez transpozycji!)
+                    for key, ft_type in robot.observation_features.items():
+                        if isinstance(ft_type, tuple) and len(ft_type) == 3:
+                            dataset_cam_key = f"observation.images.{key}"
+                            # Przekazujemy obraz prosto z MuJoCo
+                            frame_payload[dataset_cam_key] = obs_dict[key]
+                    
+                    dataset.add_frame(frame_payload)
                 
-                # Loop safeguard (simulation cutoff)
                 if step > 300: 
                     done = True
                 
@@ -131,18 +154,15 @@ def main(config: dict):
                     
                 step += 1
                 
-            # End of episode - save the episode to disk
             if config["save_trajectory"] and dataset is not None:
                 print(f"[INFO] Saving episode {ep_idx + 1}...")
                 dataset.save_episode()
 
-    # Consolidate and optionally upload the dataset after the session ends
     if config["save_trajectory"] and dataset is not None:
         print("\nAll episodes recorded! Consolidating dataset...")
         dataset.finalize()
         print("[SUCCESS] Data has been consolidated and saved locally!")
         
-        # Trigger Hugging Face Hub upload if requested
         if config["push_to_hub"]:
             print(f"🚀 Uploading dataset repository to Hugging Face Hub ({config['repo_id']})...")
             dataset.push_to_hub()
@@ -154,7 +174,6 @@ def main(config: dict):
 # ==============================================================================
 
 def parse_cli_arguments() -> dict:
-    """Builds the menu based on registries and returns the configuration."""
     print("✨ ORCA HAND DYNAMIC RECORDING WIZARD ✨\n")
 
     answers = questionary.form(
@@ -185,26 +204,22 @@ def parse_cli_arguments() -> dict:
         )
     ).ask()
 
-    # If user interrupts via Ctrl+C
     if not answers:
         return {}
 
-    # Convert episode count from str to int
     answers["episodes_to_record"] = int(answers["episodes_to_record"])
 
-    # Conditional path prompts (only if save_trajectory=True)
     if answers["save_trajectory"]:
         repo_details = questionary.form(
             repo_id=questionary.text(
                 "📝 LeRobot repository ID:",
-                default="PiotrJunior/orca_hand_genesis_ds"
+                default="PiotrJunior/orcahand_ds"
             )
         ).ask()
         if not repo_details:
             return {}
         answers.update(repo_details)
 
-        # INTERACTIVE OVERWRITE LOGIC
         cache_path = Path.home() / ".cache" / "huggingface" / "lerobot" / answers["repo_id"]
         if cache_path.exists():
             overwrite = questionary.confirm(
@@ -219,7 +234,6 @@ def parse_cli_arguments() -> dict:
                 shutil.rmtree(cache_path)
                 print(f"[INFO] Cleaned existing local cache path: {cache_path}")
 
-        # HUGGING FACE HUB PROMPT
         push_hub = questionary.confirm(
             "🚀 Upload dataset to Hugging Face Hub when finished?",
             default=False
@@ -238,13 +252,11 @@ def parse_cli_arguments() -> dict:
 
 if __name__ == "__main__":
     try:
-        # Step 1: Build configuration from UI
         config_dict = parse_cli_arguments()
         if not config_dict:
             print("\n[ABORTED] Session not configured.")
             sys.exit(0)
             
-        # Step 2: Pass clean dictionary to main()
         main(config_dict)
         
     except KeyboardInterrupt:
