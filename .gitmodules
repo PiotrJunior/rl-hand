@@ -1,3 +1,6 @@
 [submodule "orcahand"]
 	path = orcahand_description
 	url = https://github.com/orcahand/orcahand_description.git
+[submodule "orca_teleop"]
+	path = orca_teleop
+	url = https://github.com/orcahand/orca_teleop.git
