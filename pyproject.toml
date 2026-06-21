@@ -11,9 +11,17 @@ dependencies = [
     "genesis-world>=0.4.7",
     "lerobot[hilserl]>=0.5.1",
     "questionary>=2.1.1",
+    "mediapipe>=0.10.35",
+    "orca-core",
 ]
 
 [tool.uv]
 exclude-dependencies = [
     "opencv-python-headless",
+    "gymnasium",
+    "rerun-sdk",
+    "torchcodec",
 ]
+
+[tool.uv.sources]
+orca-core = { git = "https://github.com/orcahand/orca_core.git", rev = "main" }
