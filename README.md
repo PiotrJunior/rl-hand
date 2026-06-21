@@ -4,5 +4,5 @@ uv sync
 ```
 To run: 
 ```
-uv run src/record.py
+uv run python src/hil.py --config_path src/env.json
 ```
