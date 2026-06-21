@@ -3,21 +3,22 @@ import torch
 gs.init(backend=gs.cpu)
 
 scene = gs.Scene(
-    show_viewer=True,
+    # show_viewer=True,
     viewer_options=gs.options.ViewerOptions(
         camera_pos=(1, 1, 2),
         camera_lookat=(0, 0, 1),
-        res=(1280, 720),
-        max_FPS=60,
+        res=(1920, 1080),
+        max_FPS=120,
     ),
 )
 
 plane = scene.add_entity(gs.morphs.Plane())
 
 orca = scene.add_entity(
-    gs.morphs.MJCF(
-        file='orcahand_description/v2/models/mjcf/orcahand_right_body.xml',
+    gs.morphs.URDF(
+        file='orcahand_description/v2/models/urdf/orcahand_right.urdf',
         pos=(0.0, 0.0, 1.0),
+        fixed=True,
     ),
 )
 
@@ -26,16 +27,13 @@ camera = scene.add_camera(
     pos=(1, 1, 2),
     lookat=(0, 0, 1),
     fov=45,
-    GUI=True,
+    # GUI=True,
 )
 
 scene.build()
 
 import cv2
 print("Scene initialized. Starting main loop...")
-
-
-rgb = camera.render(depth=False, segmentation=False, normal=False)[0]
 
 print("Liczba stopni swobody (DOFs):", orca.n_dofs)
 
@@ -89,5 +87,5 @@ for i in range(1000):
     # action[1:3] = -1 
     # orca.control_dofs_position(action)
     scene.step()
-    rgb, _, _, _ = camera.render(rgb=True)
-    cv2.waitKey(10)  # Krótkie opóźnienie, aby upewnić się, że kamera jest gotowa
+    # rgb, _, _, _ = camera.render(rgb=True)
+    # cv2.waitKey(10)  # Krótkie opóźnienie, aby upewnić się, że kamera jest gotowa

@@ -21,11 +21,10 @@ logging.getLogger("mujoco").propagate = False
 @RobotConfig.register_subclass("mujoco_orca")
 @dataclasses.dataclass
 class OrcaRobotConfig(RobotConfig):
-    show_viewer: bool = True
+    show_viewer: bool = False
     render: bool = True  
     xml_path: str = "scene/scene.xml"
     
-    # 👇 Update this to use explicit CameraConfig instances
     cameras: dict[str, CameraConfig] = dataclasses.field(default_factory=lambda: {
         "base": CameraConfig(height=480, width=640, fps=30),
         "wrist": CameraConfig(height=480, width=640, fps=30)
@@ -35,6 +34,31 @@ class OrcaRobotConfig(RobotConfig):
 # 2. CORE ROBOT CLASS (Multi-Camera Compliant)
 # ==============================================================================
 
+class MuJoCoMockBus:
+    """Udaje sprzętową płytkę sterującą dla środowiska HIL-SERL."""
+    def __init__(self, robot_instance):
+        self._robot = robot_instance
+        # Skrypt HIL-SERL oczekuje nazw silników bez końcówki '.pos'
+        self.motors = {key.replace('.pos', ''): None for key in robot_instance._motors_ft.keys()}
+        self.is_connected = True
+        self.is_calibrated = True
+
+    def sync_read(self, command: str) -> dict:
+        if command == "Present_Position":
+            obs = self._robot.get_observation()
+            return {k: float(obs.get(f"{k}.pos", 0.0)) for k in self.motors.keys()}
+        return {}
+
+    def sync_write(self, command: str, target_dict: dict):
+        if command == "Goal_Position":
+            action = {f"{k}.pos": float(v) for k, v in target_dict.items()}
+            self._robot.send_action(action)
+            
+    def connect(self): pass
+    def disconnect(self, *args): pass
+
+
+# ZMODYFIKUJ OrcaRobot:
 class OrcaRobot(Robot):
     name = "mujoco_orca_robot"
     config_class = OrcaRobotConfig
@@ -46,14 +70,19 @@ class OrcaRobot(Robot):
         self._is_connected = False
         self._is_calibrated = False
         
-        # MuJoCo engine components
         self.model = None
         self.data = None
         self.viewer = None
-        
-        # Multi-camera lookup containers
         self.renderers = {}
         self.camera_name_to_id = {}
+
+        # 👇 1. ZAINICJUJ MOCK BUS
+        self.bus = MuJoCoMockBus(self)
+
+    # 👇 2. DODAJ WŁAŚCIWOŚĆ KAMER DLA HIL-SERL
+    @property
+    def cameras(self):
+        return self.config.cameras
 
     # --------------------------------------------------------------------------
     # MOTOR & CAMERA FEATURES SCHEMA
