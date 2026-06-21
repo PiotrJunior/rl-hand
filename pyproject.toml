@@ -10,13 +10,11 @@ dependencies = [
     "torchvision",
     "genesis-world>=0.4.7",
     "lerobot>=0.5.1",
+    "questionary>=2.1.1",
 ]
 
 [tool.uv]
 exclude-dependencies = [
     "opencv-python-headless",
-    "av",
     "gymnasium",
-    "rerun-sdk",
-    "torchcodec",
 ]
