@@ -76,8 +76,9 @@ class KeyboardTeleoperator(Teleoperator):
         print("-" * 55)
         print("NATIVE HIL-SERL CONTROLS:")
         print("  [I]     : Toggle Intervention (AI <-> Human)")
-        print("  [C]     : FAIL (Rerecord) - Trash data & reset")
-        print("  [SPACE] : SUCCESS - Save data & reset")
+        print("  [C]     : FAIL (Rerecord) - Trash data & try again")
+        print("  [Q]     : QUIT - End episode as failure (No save)")
+        print("  [SPACE] : SUCCESS - Save good data & reset")
         print("="*55 + "\n")
 
     @property
@@ -95,7 +96,7 @@ class KeyboardTeleoperator(Teleoperator):
                     status = "🔴 ACTIVE (Human)" if self._is_intervening else "🟢 INACTIVE (AI)"
                     print(f"[TELEOP] Intervention: {status}")
 
-            # 2. Base Velocity Control (Indices swapped based on layout preference)
+            # 2. Base Velocity Control (Swapped Axes)
             elif key.char == 'w': self.current_action[18] = 1.0   # Y-Axis (Left)
             elif key.char == 's': self.current_action[18] = -1.0  # Y-Axis (Right)
             elif key.char == 'a': self.current_action[17] = -1.0  # X-Axis (Backward)
@@ -103,17 +104,24 @@ class KeyboardTeleoperator(Teleoperator):
             elif key.char == 'r': self.current_action[19] = 1.0   # Z-Axis (Up)
             elif key.char == 'f': self.current_action[19] = -1.0  # Z-Axis (Down)
             
-            # 3. Native Rerecord (Failure)
+            # 3. Native Rerecord (Failure - Try Again)
             elif key.char == 'c': 
                 self._rerecord_episode = True
                 self._terminate_episode = True
-                print("[TELEOP] ⚠️ FAIL: Trashing episode...")
+                print("[TELEOP] ⚠️ FAIL: Trashing data and restarting episode...")
+
+            # 4. Native Quit (Failure - Move On)
+            elif key.char == 'q':
+                self._terminate_episode = True
+                self._success = False
+                print("[TELEOP] ⏭️ QUIT: Ending episode without success...")
                 
         except AttributeError: 
-            # 4. Native Success
+            # 5. Native Success (Save and Move On)
             if key == keyboard.Key.space:
                 self._success = True
                 self._terminate_episode = True
+                print("[TELEOP] 🏆 SUCCESS: Saving episode data...")
                 print("[TELEOP] 🏆 SUCCESS: Saving episode...")
 
     def _on_release(self, key):

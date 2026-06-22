@@ -19,10 +19,10 @@ class OrcaRobotConfig(RobotConfig):
     show_viewer: bool = False
     render_cv2: bool = True
     xml_path: str = "scene/scene.xml"
-    
-    cameras: dict[str, CameraConfig] = dataclasses.field(default_factory=lambda: {
-        "base": CameraConfig(height=480, width=640, fps=30),
-        "wrist": CameraConfig(height=480, width=640, fps=30)
+    # Camera specs as plain dicts — no CameraConfig, no draccus encoding issue
+    camera_configs: dict[str, dict] = dataclasses.field(default_factory=lambda: {
+        "base":  {"height": 480, "width": 640, "fps": 30},
+        "wrist": {"height": 480, "width": 640, "fps": 30},
     })
 
 # ==============================================================================
@@ -100,8 +100,19 @@ class OrcaRobot(Robot):
 
     @property
     def cameras(self):
-        return self.config.cameras
+        # Return a simple namespace so existing code using .height/.width/.fps still works
+        return {
+            name: type("Cam", (), cfg)()
+            for name, cfg in self.config.camera_configs.items()
+        }
 
+    @property
+    def _cameras_ft(self) -> dict[str, tuple]:
+        return {
+            name: (cfg["height"], cfg["width"], 3)
+            for name, cfg in self.config.camera_configs.items()
+        }
+    
     @property
     def _motors_ft(self) -> dict[str, type]:
         """
@@ -167,14 +178,13 @@ class OrcaRobot(Robot):
         self.data = mujoco.MjData(self.model)
         
         # Build Camera Mappings
-        for cam_name, cam_cfg in self.config.cameras.items():
+        for cam_name, cam_cfg in self.config.camera_configs.items():
             cam_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_CAMERA, cam_name)
             if cam_id == -1:
-                raise ValueError(f"Camera identifier '{cam_name}' not found in XML.")
-            
+                raise ValueError(f"Camera '{cam_name}' not found in XML.")
             self.camera_name_to_id[cam_name] = cam_id
             self.renderers[cam_name] = mujoco.Renderer(
-                self.model, height=cam_cfg.height, width=cam_cfg.width
+                self.model, height=cam_cfg["height"], width=cam_cfg["width"]
             )
 
         # Build Actuator to Joint Mappings
@@ -239,7 +249,7 @@ class OrcaRobot(Robot):
         for cam_key, cam_id in self.camera_name_to_id.items():
             renderer = self.renderers[cam_key]
             renderer.update_scene(self.data, camera=cam_id)
-            img_rgb = renderer.render()
+            img_rgb = np.array(renderer.render().copy(), dtype=np.uint8)
             obs_dict[cam_key] = img_rgb
             
             # Optional GUI preview
@@ -251,7 +261,7 @@ class OrcaRobot(Robot):
             
         # Fetch and normalize actuator target states
         for motor_feature in self._motors_ft.keys():
-            act_name = motor_feature.replace('.pos', '')
+            act_name = motor_feature.replace('.pos', '_actuator')
             act_id = self.actuator_name_to_id.get(act_name, -1)
             
             if act_id != -1:

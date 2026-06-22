@@ -2,9 +2,10 @@
     "device": "cpu",
     "mode": "record",
     "dataset": {
-        "repo_id": "PiotrJunior/orcahand_ds_hil",
+        "repo_id": "PiotrJunior/orcahand_ds_hil-2",
         "task": "Get the red sphere into the green box!",
-        "num_episodes_to_record": 5
+        "num_episodes_to_record": 1,
+        "push_to_hub": true
     },
     "env": {
         "name": "real_robot",
